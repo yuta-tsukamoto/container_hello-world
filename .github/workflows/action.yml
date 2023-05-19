@@ -1,0 +1,76 @@
+# 参考
+# https://docs.github.com/ja/actions/publishing-packages/publishing-docker-images?learn=continuous_deployment&learnProduct=actions#github-packages%E3%81%B8%E3%81%AE%E3%82%A4%E3%83%A1%E3%83%BC%E3%82%B8%E3%81%AE%E5%85%AC%E9%96%8B
+
+# このワークフローはGitHubによって認定されていないアクションを使用します。
+# それらはサードパーティによって提供され、
+# 別個の利用規約、プライバシーポリシー、
+# サポートドキュメンテーションが適用されます。
+
+# GitHub recommends pinning actions to a commit SHA.
+# To get a newer version, you will need to update the SHA.
+# You can also reference a tag or branch, but the action may change without warning.
+
+name: Create and publish, container run a Docker image
+
+on:
+  push:
+    branches: ['main'] # mainブランチにプッシュされたとき（PRがマージされた時）
+
+env: # 環境変数
+  REGISTRY: ghcr.io # コンテナレジストリ: GitHub Container Registryは、この命名にする必要がある
+  IMAGE_NAME: ${{ github.repository }} # コンテナイメージ: リポジトリの名前
+  TAG: ${{ github.ref_name }}-${{ github.run_id }} # タグ: ワークフローを実行したブランチ名-actionsのrun id
+
+jobs:
+  build-and-push-image: # Job1: Github Container Registryにプッシュする
+    runs-on: ubuntu-latest # 実行環境
+    permissions: # secrets.GITHUB_TOKENの権限を変更する
+      contents: read
+      packages: write
+
+    steps: # Job1で具体的にやること
+      - name: Checkout repository # checkoutする（mainブランチからブランチを切る感じ？）
+        uses: actions/checkout@v3
+
+      - name: Log in to the Container registry # GitHub Container Registryとやり取りする
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with: # 必要なパラメータ↓
+          registry: ${{ env.REGISTRY }} # 環境変数から取得
+          username: ${{ github.actor }} # レジストリにプッシュする人の指定
+          password: ${{ secrets.GITHUB_TOKEN }} # ワークフロー内での認証で使用できる、自動的に生成されたトークン https://docs.github.com/ja/actions/security-guides/automatic-token-authentication
+
+      - name: Build and push Docker image # ビルドとイメージをプッシュする
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          context: .
+          push: true # trueだとレジストリにプッシュすることになる
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+
+  image_pull-and-container_run:
+    runs-on: ubuntu-latest
+    needs: build-and-push-image
+    container: #起動するコンテナイメージを指定
+      image: docker:20.10.3-dind
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Log in to the Container registry
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx # "container:"を使うときにこれがないとエラーになる
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Container run # pushしたイメージをpullして実行する
+        run: |
+          docker image pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          docker container run ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
